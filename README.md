@@ -1,3 +1,5 @@
+[![中文](https://img.shields.io/badge/语言-中文-d73a49?style=for-the-badge)](./README.zh-CN.md)
+
 # Medical Datasets SDK
 
 Dependency-free Python SDK and CLI for authenticated dataset upload and download. It uses independent scoped SDK Keys and presigned S3/MinIO transfers.

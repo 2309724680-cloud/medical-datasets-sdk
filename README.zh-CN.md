@@ -1,0 +1,162 @@
+[![English](https://img.shields.io/badge/Language-English-0969da?style=for-the-badge)](./README.md)
+
+# 医疗数据集 SDK
+
+用于医疗数据集平台上传和下载的 Python SDK 与命令行工具。SDK 使用独立、可限定权限的 SDK Key，并通过预签名 URL 与 S3/MinIO 对象存储直接传输文件。
+
+安装完成后可以直接使用 `medical-datasets` 命令，不需要下载或编写单独的 Python 上传脚本。
+
+## 安装
+
+直接从公开的 GitHub 仓库安装：
+
+```bash
+python -m pip install -U git+https://github.com/2309724680-cloud/medical-datasets-sdk.git
+```
+
+检查安装版本：
+
+```bash
+python -m medical_datasets_sdk.cli --version
+```
+
+### Windows 命令路径
+
+Windows 的用户级 Python 安装可能不会自动把命令目录加入 `PATH`。在当前 PowerShell 中执行：
+
+```powershell
+$sdkScripts = python -c "import sysconfig; print(sysconfig.get_path('scripts', scheme='nt_user'))"
+$env:Path = "$sdkScripts;$env:Path"
+medical-datasets --version
+```
+
+永久加入当前用户的 `PATH`：
+
+```powershell
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$sdkScripts*") {
+    [Environment]::SetEnvironmentVariable("Path", "$userPath;$sdkScripts", "User")
+}
+```
+
+## 配置 SDK Key
+
+先在医疗数据集平台创建 SDK Key，并按实际用途选择 `read`、`download`、`upload` 权限。
+
+Linux 或 macOS：
+
+```bash
+export MEDICAL_DATASETS_SDKEY="your-sdk-key"
+```
+
+Windows PowerShell 推荐使用安全输入，避免 Key 出现在命令历史中：
+
+```powershell
+$secureKey = Read-Host "输入 SDK Key" -AsSecureString
+$key = [Net.NetworkCredential]::new("", $secureKey).Password.Trim()
+$env:MEDICAL_DATASETS_SDKEY = $key
+```
+
+验证身份：
+
+```bash
+medical-datasets auth-check
+```
+
+环境变量默认只在当前终端中有效。不要把 SDK Key 写进代码、聊天、截图、Git 仓库或普通脚本文件。Key 一旦泄露，应立即在平台撤销并重新创建。
+
+## 配置平台地址
+
+SDK 默认连接预览平台：
+
+```text
+http://10.20.13.1:24174
+```
+
+需要连接其他环境时设置：
+
+```powershell
+$env:MEDICAL_DATASETS_URL = "http://10.20.13.1:24174"
+```
+
+也可以在命令中指定：
+
+```bash
+medical-datasets --base-url http://10.20.13.1:24174 auth-check
+```
+
+## 命令行上传
+
+创建新数据集：
+
+```powershell
+medical-datasets upload "C:\Users\86131\Desktop\测试2" --name "测试2" --source-name "SDK上传" --category "Other"
+```
+
+Linux 或 macOS：
+
+```bash
+medical-datasets upload ./dataset-folder \
+  --name "示例数据集" \
+  --source-name "项目组" \
+  --category "Other"
+```
+
+上传文件到已有数据集：
+
+```bash
+medical-datasets upload ./new-files --dataset-slug example-dataset
+```
+
+SDK 会执行以下流程：
+
+1. 使用 SDK Key 向平台申请短期预签名 URL。
+2. 将文件直接上传到 MinIO，不经过浏览器上传页面。
+3. 由平台校验、分析并整理文件。
+4. 提交不可变的数据集 revision。
+
+## 命令行下载
+
+```powershell
+medical-datasets download example-dataset --destination "C:\Users\86131\Desktop\下载目录"
+```
+
+下载会优先使用 MinIO 预签名 URL。中断的文件使用 `.part` 临时文件，并在服务端支持 HTTP Range 时自动续传。
+
+## Python API 下载
+
+需要集成到 Python 程序时：
+
+```python
+from medical_datasets_sdk import MedicalDatasetsClient
+
+client = MedicalDatasetsClient("http://10.20.13.1:24174")
+path = client.download_dataset("example-dataset", destination="./datasets")
+print(path)
+```
+
+## Python API 上传
+
+```python
+from medical_datasets_sdk import MedicalDatasetsClient
+
+client = MedicalDatasetsClient("http://10.20.13.1:24174")
+result = client.upload_dataset(
+    "./dataset-folder",
+    name="示例数据集",
+    source_name="项目组",
+    summary="SDK 上传示例",
+    category="Other",
+    progress=lambda path, done, total: print(path, done, total),
+)
+print(result["revision"]["id"])
+```
+
+## SDK Key 安全规则
+
+- 不要把 SDK Key 提交到源代码仓库。
+- 优先通过 `MEDICAL_DATASETS_SDKEY` 环境变量配置 Key。
+- 自动化任务只分配实际需要的 `read`、`download`、`upload` 权限。
+- 不同设备和任务使用不同 Key，便于单独撤销和审计。
+- Key 被撤销后会立即失效，并从用户的有效 Key 列表中消失。
+- MinIO Bucket 保持私有，用户必须先通过平台鉴权才能获得短期访问 URL。
