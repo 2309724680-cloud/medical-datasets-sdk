@@ -2,9 +2,9 @@
 
 # 医疗数据集 SDK
 
-用于医疗数据集平台上传和下载的 Python SDK 与命令行工具。SDK 使用独立、可限定权限的 SDK Key，并通过预签名 URL 与 S3/MinIO 对象存储直接传输文件。
+这是一个可通过 `pip` 安装的医疗数据集 SDK 命令行工具。SDK 使用独立、可限定权限的 SDK Key，并通过预签名 URL 与 S3/MinIO 对象存储直接传输文件。
 
-安装完成后可以直接使用 `medical-datasets` 命令，不需要下载或编写单独的 Python 上传脚本。
+安装完成后直接使用 `medical-datasets` 命令，不需要下载、编写或维护单独的 Python 上传下载脚本。
 
 ## 安装
 
@@ -122,35 +122,6 @@ medical-datasets download example-dataset --destination "C:\Users\86131\Desktop\
 ```
 
 下载会优先使用 MinIO 预签名 URL。中断的文件使用 `.part` 临时文件，并在服务端支持 HTTP Range 时自动续传。
-
-## Python API 下载
-
-需要集成到 Python 程序时：
-
-```python
-from medical_datasets_sdk import MedicalDatasetsClient
-
-client = MedicalDatasetsClient("http://10.20.13.1:24174")
-path = client.download_dataset("example-dataset", destination="./datasets")
-print(path)
-```
-
-## Python API 上传
-
-```python
-from medical_datasets_sdk import MedicalDatasetsClient
-
-client = MedicalDatasetsClient("http://10.20.13.1:24174")
-result = client.upload_dataset(
-    "./dataset-folder",
-    name="示例数据集",
-    source_name="项目组",
-    summary="SDK 上传示例",
-    category="Other",
-    progress=lambda path, done, total: print(path, done, total),
-)
-print(result["revision"]["id"])
-```
 
 ## SDK Key 安全规则
 

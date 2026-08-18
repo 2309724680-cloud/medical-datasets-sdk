@@ -2,7 +2,7 @@
 
 # Medical Datasets SDK
 
-Dependency-free Python SDK and CLI for authenticated dataset upload and download. It uses independent scoped SDK Keys and presigned S3/MinIO transfers.
+Pip-installable SDK command line tool for authenticated dataset upload and download. It uses independent scoped SDK Keys and presigned S3/MinIO transfers. Users do not need to download or maintain a standalone Python script.
 
 ## Install
 
@@ -77,36 +77,7 @@ medical-datasets upload ./new-files --dataset-slug example-dataset
 medical-datasets download example-dataset --destination ./datasets
 ```
 
-## Python API download
-
-```python
-from medical_datasets_sdk import MedicalDatasetsClient
-
-client = MedicalDatasetsClient("http://10.20.13.1:24174")
-path = client.download_dataset("example-dataset", destination="./datasets")
-print(path)
-```
-
 Interrupted downloads use a `.part` file and resume automatically when the server supports HTTP ranges.
-
-## Python API upload
-
-```python
-from medical_datasets_sdk import MedicalDatasetsClient
-
-client = MedicalDatasetsClient("http://10.20.13.1:24174")
-result = client.upload_dataset(
-    "./dataset-folder",
-    name="Example Dataset",
-    source_name="Research Team",
-    summary="Example SDK upload",
-    category="Other",
-    progress=lambda path, done, total: print(path, done, total),
-)
-print(result["revision"]["id"])
-```
-
-The client supports directory traversal, chunked file upload, server-side analysis, revision commits, recursive download, and resumable file downloads.
 
 ## Key handling
 
