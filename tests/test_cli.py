@@ -31,6 +31,20 @@ class CliTests(unittest.TestCase):
         self.assertIn("revision-1", output.getvalue())
         self.assertEqual(client_type.return_value.upload_dataset.call_args.kwargs["name"], "Example")
 
+    @patch("medical_datasets_sdk.cli.MedicalDatasetsClient")
+    def test_upload_command_infers_dataset_name(self, client_type):
+        client_type.return_value.upload_dataset.return_value = {
+            "dataset": {"slug": "dataset-folder"},
+            "revision": {"id": "revision-2"},
+        }
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = main(["upload", "./dataset-folder"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("revision-2", output.getvalue())
+        self.assertEqual(client_type.return_value.upload_dataset.call_args.kwargs["name"], "dataset-folder")
+
 
 if __name__ == "__main__":
     unittest.main()

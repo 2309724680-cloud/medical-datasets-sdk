@@ -72,6 +72,16 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(api.call_args_list[2].args[2]["direct"])
         self.assertIn("/complete", api.call_args_list[3].args[1])
 
+    def test_upload_infers_new_dataset_name_from_local_directory(self):
+        client = MedicalDatasetsClient("http://platform.example", token="sdk-secret")
+        client.create_dataset = MagicMock(return_value={"id": 9, "slug": "scan-batch"})
+        client.import_directory = MagicMock(return_value={"dataset": {"slug": "scan-batch"}, "revision": {"id": "revision-3"}})
+
+        result = client.upload_dataset(Path("C:/datasets/scan-batch"))
+
+        self.assertEqual(result["revision"]["id"], "revision-3")
+        self.assertEqual(client.create_dataset.call_args.args[0], "scan-batch")
+
 
 if __name__ == "__main__":
     unittest.main()

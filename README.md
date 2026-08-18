@@ -54,15 +54,15 @@ No Python script is required after installation:
 
 ```bash
 medical-datasets upload ./dataset-folder \
-  --name "Example Dataset" \
-  --source-name "Research Team" \
-  --category "Other"
+  --source-name "Research Team"
 ```
+
+For a new dataset, the local file or directory name is used automatically. `--name`, `--source-name`, and `--category` are optional metadata overrides.
 
 Windows PowerShell example:
 
 ```powershell
-medical-datasets upload "C:\Users\86131\Desktop\测试2" --name "测试2" --source-name "SDK上传" --category "Other"
+medical-datasets upload "C:\Users\86131\Desktop\测试2"
 ```
 
 Upload to an existing dataset:

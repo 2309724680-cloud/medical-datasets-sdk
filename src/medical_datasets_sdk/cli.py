@@ -30,10 +30,10 @@ def parser() -> argparse.ArgumentParser:
 
     upload = commands.add_parser("upload", help="upload a file, archive, or directory")
     upload.add_argument("source", type=Path)
-    target = upload.add_mutually_exclusive_group(required=True)
-    target.add_argument("--name", help="create a new dataset with this name")
+    target = upload.add_mutually_exclusive_group()
+    target.add_argument("--name", help="create a new dataset with this name; defaults to the local file or directory name")
     target.add_argument("--dataset-slug", help="append to an existing dataset")
-    upload.add_argument("--source-name", default="SDK upload")
+    upload.add_argument("--source-name", default="SDK 上传")
     upload.add_argument("--summary", default="")
     upload.add_argument("--category", default="Other")
     upload.add_argument("--message", default="SDK upload")
@@ -54,10 +54,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(user, ensure_ascii=False))
             return 0
         if args.command == "upload":
+            dataset_name = args.name
+            if not args.dataset_slug and not str(dataset_name or "").strip():
+                dataset_name = args.source.expanduser().name or "SDK 上传数据集"
             result = client.upload_dataset(
                 args.source,
                 dataset_slug=args.dataset_slug,
-                name=args.name,
+                name=dataset_name,
                 source_name=args.source_name,
                 summary=args.summary,
                 category=args.category,

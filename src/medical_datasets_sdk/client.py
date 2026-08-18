@@ -114,16 +114,17 @@ class MedicalDatasetsClient:
     ) -> dict:
         """Upload, organize, and publish in one call.
 
-        Pass ``dataset_slug`` to append to an existing dataset. If omitted, pass
-        ``name`` to create and publish a new dataset. ``source`` may be one file,
-        an archive, or a directory. The returned dictionary contains the committed
-        revision and dataset metadata.
+        Pass ``dataset_slug`` to append to an existing dataset. If both
+        ``dataset_slug`` and ``name`` are omitted, the local file or directory name
+        is used for the new dataset. ``source`` may be one file, an archive, or a
+        directory. The returned dictionary contains the committed revision and
+        dataset metadata.
         """
         if dataset_slug and name:
             raise ValueError("dataset_slug 和 name 只能填写一个")
         is_new_dataset = not dataset_slug
         if is_new_dataset and not str(name or "").strip():
-            raise ValueError("新建数据集必须填写 name；追加已有数据集请填写 dataset_slug")
+            name = Path(source).expanduser().name or "SDK 上传数据集"
 
         slug = dataset_slug
         if is_new_dataset:
