@@ -16,6 +16,22 @@ from typing import Callable, Iterator
 ProgressCallback = Callable[[str, int, int], None]
 
 
+class _ProgressReader:
+    def __init__(self, handle, path: str, total: int, callback: ProgressCallback | None):
+        self.handle = handle
+        self.path = path
+        self.total = total
+        self.callback = callback
+        self.done = 0
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self.handle.read(size)
+        self.done += len(chunk)
+        if self.callback and chunk:
+            self.callback(self.path, self.done, self.total)
+        return chunk
+
+
 class MedicalDatasetsError(RuntimeError):
     """Raised when the catalog API rejects a request."""
 
@@ -215,8 +231,39 @@ class MedicalDatasetsClient:
                 remote = self._json_request(
                     "POST",
                     f"/api/uploads/{urllib.parse.quote(upload_id, safe='')}/files",
-                    {"path": relative_path, "sizeBytes": size_bytes},
+                    {
+                        "path": relative_path,
+                        "sizeBytes": size_bytes,
+                        "direct": True,
+                        "contentType": "application/octet-stream",
+                    },
                 )
+                if remote.get("uploadUrl"):
+                    with local_path.open("rb") as handle:
+                        upload_request = urllib.request.Request(
+                            remote["uploadUrl"],
+                            data=_ProgressReader(handle, relative_path, size_bytes, progress),
+                            method="PUT",
+                            headers={
+                                "Content-Type": "application/octet-stream",
+                                "Content-Length": str(size_bytes),
+                            },
+                        )
+                        try:
+                            with urllib.request.urlopen(upload_request, timeout=self.timeout) as response:
+                                response.read()
+                        except urllib.error.HTTPError as error:
+                            raise MedicalDatasetsError(f"对象存储上传失败: HTTP {error.code}") from error
+                        except urllib.error.URLError as error:
+                            raise MedicalDatasetsError(f"无法连接对象存储: {error.reason}") from error
+                    self._json_request(
+                        "POST",
+                        f"/api/uploads/{urllib.parse.quote(upload_id, safe='')}/files/{urllib.parse.quote(remote['id'], safe='')}/complete",
+                        {},
+                    )
+                    if progress and size_bytes == 0:
+                        progress(relative_path, 0, 0)
+                    continue
                 uploaded = int(remote.get("uploadedBytes", 0))
                 with local_path.open("rb") as handle:
                     handle.seek(uploaded)
@@ -376,7 +423,17 @@ class MedicalDatasetsClient:
             return target
 
         query = urllib.parse.urlencode({"path": path})
-        request = self._request(f"/api/datasets/{self._quote_slug(slug)}/download?{query}")
+        request = self._request(f"/api/datasets/{self._quote_slug(slug)}/object-download?{query}")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                object_download = json.load(response)
+            request = urllib.request.Request(object_download["url"], method="GET")
+        except urllib.error.HTTPError as error:
+            if error.code not in {404, 409}:
+                raise self._api_error(error) from error
+            request = self._request(f"/api/datasets/{self._quote_slug(slug)}/download?{query}")
+        except (KeyError, json.JSONDecodeError):
+            request = self._request(f"/api/datasets/{self._quote_slug(slug)}/download?{query}")
         if downloaded:
             request.add_header("Range", f"bytes={downloaded}-")
 

@@ -1,6 +1,6 @@
 # Medical Datasets SDK
 
-Dependency-free Python SDK for authenticated dataset upload and download.
+Dependency-free Python SDK for authenticated dataset upload and download. Version 0.2 adds independent scoped SDK Keys and presigned S3/MinIO downloads.
 
 ## Install
 
@@ -58,4 +58,5 @@ The client supports directory traversal, chunked file upload, server-side analys
 - Never commit an SDK Key to source control.
 - Prefer `MEDICAL_DATASETS_SDKEY` over passing a key in code.
 - Revoke exposed or unused keys from the platform immediately.
+- Give automation only the scopes it needs: `read`, `download`, and/or `upload`.
 - The preview environment is not a production credential boundary.
