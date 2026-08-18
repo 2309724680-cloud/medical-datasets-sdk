@@ -8,6 +8,14 @@ Dependency-free Python SDK and CLI for authenticated dataset upload and download
 python -m pip install -U git+https://github.com/2309724680-cloud/medical-datasets-sdk.git
 ```
 
+On Windows, user-level Python installations may place the command outside the current `PATH`. Add it for the current PowerShell session:
+
+```powershell
+$sdkScripts = python -c "import sysconfig; print(sysconfig.get_path('scripts', scheme='nt_user'))"
+$env:Path = "$sdkScripts;$env:Path"
+medical-datasets --version
+```
+
 ## Authentication
 
 Create an SDK Key in the platform, then set it as an environment variable:
@@ -19,13 +27,23 @@ export MEDICAL_DATASETS_SDKEY="your-sdk-key"
 Windows PowerShell:
 
 ```powershell
-$env:MEDICAL_DATASETS_SDKEY="your-sdk-key"
+$secureKey = Read-Host "Input SDK Key" -AsSecureString
+$key = [Net.NetworkCredential]::new("", $secureKey).Password.Trim()
+$env:MEDICAL_DATASETS_SDKEY = $key
 ```
+
+The environment variable is available only in the current terminal. Do not paste SDK Keys into chat, source code, screenshots, or shell scripts.
 
 Validate the key:
 
 ```bash
 medical-datasets auth-check
+```
+
+Use another platform URL when needed:
+
+```powershell
+$env:MEDICAL_DATASETS_URL = "http://10.20.13.1:24174"
 ```
 
 ## Command line upload
@@ -37,6 +55,12 @@ medical-datasets upload ./dataset-folder \
   --name "Example Dataset" \
   --source-name "Research Team" \
   --category "Other"
+```
+
+Windows PowerShell example:
+
+```powershell
+medical-datasets upload "C:\Users\86131\Desktop\测试2" --name "测试2" --source-name "SDK上传" --category "Other"
 ```
 
 Upload to an existing dataset:
