@@ -1,6 +1,6 @@
 # Medical Datasets SDK
 
-Dependency-free Python SDK for authenticated dataset upload and download. Version 0.2 adds independent scoped SDK Keys and presigned S3/MinIO downloads.
+Dependency-free Python SDK and CLI for authenticated dataset upload and download. It uses independent scoped SDK Keys and presigned S3/MinIO transfers.
 
 ## Install
 
@@ -22,7 +22,36 @@ Windows PowerShell:
 $env:MEDICAL_DATASETS_SDKEY="your-sdk-key"
 ```
 
-## Download
+Validate the key:
+
+```bash
+medical-datasets auth-check
+```
+
+## Command line upload
+
+No Python script is required after installation:
+
+```bash
+medical-datasets upload ./dataset-folder \
+  --name "Example Dataset" \
+  --source-name "Research Team" \
+  --category "Other"
+```
+
+Upload to an existing dataset:
+
+```bash
+medical-datasets upload ./new-files --dataset-slug example-dataset
+```
+
+## Command line download
+
+```bash
+medical-datasets download example-dataset --destination ./datasets
+```
+
+## Python API download
 
 ```python
 from medical_datasets_sdk import MedicalDatasetsClient
@@ -34,7 +63,7 @@ print(path)
 
 Interrupted downloads use a `.part` file and resume automatically when the server supports HTTP ranges.
 
-## Upload
+## Python API upload
 
 ```python
 from medical_datasets_sdk import MedicalDatasetsClient

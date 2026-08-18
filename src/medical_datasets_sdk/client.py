@@ -54,6 +54,10 @@ class MedicalDatasetsClient:
     def get_dataset(self, slug: str) -> dict:
         return self._json(f"/api/datasets/{self._quote_slug(slug)}")
 
+    def whoami(self) -> dict:
+        """Return the user represented by the configured SDK Key."""
+        return self._json("/api/auth/me")["user"]
+
     def create_dataset(
         self,
         name: str,
