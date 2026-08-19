@@ -95,6 +95,8 @@ py -3 -m medical_datasets_sdk.cli upload "C:\Users\86131\Desktop\测试2" --name
 
 新建数据集时需要填写数据集名称和数据来源，其他网页元数据无需填写。
 
+大文件会自动使用 S3 Multipart 分片上传。网络中断或终端关闭后，重新执行同一条命令即可跳过已完成分片继续上传。平台支持最大 5 TiB 的单个对象；数据集超过 10 GiB 时请优先使用 SDK。
+
 Linux 或 macOS：
 
 ```bash
@@ -123,6 +125,14 @@ medical-datasets download example-dataset --destination "C:\Users\86131\Desktop\
 ```
 
 下载会优先使用 MinIO 预签名 URL。中断的文件使用 `.part` 临时文件，并在服务端支持 HTTP Range 时自动续传。
+对象存储 URL 过期后 SDK 会自动重新签名，并保留 `.part` 文件继续下载。
+
+### 超大数据集容量规划
+
+- 单文件支持上限为 5 TiB；1 TiB 文件默认拆分为 8,192 个 128 MiB 分片。
+- 上传会话默认保留 30 天，重新执行相同命令会复用未完成会话。
+- 当前平台会在 MinIO 主存储之外保留一份本地可浏览仓库，容量规划按数据集净容量的至少 2 倍计算，并额外预留解压空间。
+- 超大压缩包解压可能临时需要接近“压缩包 + 解压内容 + 主存储对象”的容量，生产环境建议上传已展开目录。
 
 ## SDK Key 安全规则
 

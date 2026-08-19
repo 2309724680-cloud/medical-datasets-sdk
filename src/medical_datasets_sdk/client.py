@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import http.client
 import os
 import re
 import time
@@ -29,6 +31,28 @@ class _ProgressReader:
         self.done += len(chunk)
         if self.callback and chunk:
             self.callback(self.path, self.done, self.total)
+        return chunk
+
+
+class _PartReader:
+    def __init__(self, handle, length: int, path: str, base: int, total: int, callback: ProgressCallback | None):
+        self.handle = handle
+        self.remaining = length
+        self.path = path
+        self.base = base
+        self.total = total
+        self.callback = callback
+        self.done = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if self.remaining <= 0:
+            return b""
+        requested = self.remaining if size is None or size < 0 else min(size, self.remaining)
+        chunk = self.handle.read(requested)
+        self.remaining -= len(chunk)
+        self.done += len(chunk)
+        if self.callback and chunk:
+            self.callback(self.path, self.base + self.done, self.total)
         return chunk
 
 
@@ -127,23 +151,40 @@ class MedicalDatasetsClient:
             name = Path(source).expanduser().name or "SDK 上传数据集"
 
         slug = dataset_slug
+        draft_state_path = None
         if is_new_dataset:
-            dataset = self.create_dataset(
-                str(name).strip(),
-                source_name,
-                summary=summary,
-                description=description,
-                category=category,
-                modalities=modalities,
-                formats=formats,
-                tags=tags,
-                readme=readme,
-                defer_initial_revision=True,
-            )
+            source_path = Path(source).expanduser().resolve()
+            draft_state_path = self._state_path("draft", str(name).strip(), str(source_path))
+            draft_state = self._load_state(draft_state_path)
+            dataset = None
+            if draft_state.get("slug"):
+                try:
+                    candidate = self.get_dataset(draft_state["slug"])
+                    if candidate.get("contentRevision"):
+                        self._remove_state(draft_state_path)
+                        return {"dataset": candidate, "revision": {"id": candidate["contentRevision"]}, "resumed": True}
+                    if candidate.get("migrationStatus") == "draft" and not candidate.get("contentRevision"):
+                        dataset = candidate
+                except MedicalDatasetsError:
+                    pass
+            if dataset is None:
+                dataset = self.create_dataset(
+                    str(name).strip(),
+                    source_name,
+                    summary=summary,
+                    description=description,
+                    category=category,
+                    modalities=modalities,
+                    formats=formats,
+                    tags=tags,
+                    readme=readme,
+                    defer_initial_revision=True,
+                )
+                self._save_state(draft_state_path, {"datasetId": dataset["id"], "slug": dataset["slug"]})
             slug = dataset["slug"]
 
         try:
-            return self.import_directory(
+            result = self.import_directory(
                 str(slug),
                 source,
                 message=message,
@@ -155,12 +196,10 @@ class MedicalDatasetsClient:
                 poll_interval=poll_interval,
                 exclude=exclude,
             )
+            if draft_state_path:
+                self._remove_state(draft_state_path)
+            return result
         except Exception:
-            if is_new_dataset:
-                try:
-                    self._json_request("DELETE", f"/api/datasets/{dataset['id']}")
-                except MedicalDatasetsError:
-                    pass
             raise
 
     def upload_directory(
@@ -225,24 +264,72 @@ class MedicalDatasetsClient:
                 raise MedicalDatasetsError(f"上传来源不是普通文件或目录: {source_path}")
             if not upload_entries:
                 raise MedicalDatasetsError("上传目录中没有普通文件")
-            session = self._json_request(
-                "POST", f"/api/datasets/{dataset['id']}/uploads", {"message": message}
-            )
+            source_fingerprint = hashlib.sha256("\n".join(
+                f"{relative_path}\0{local_path.stat().st_size}\0{local_path.stat().st_mtime_ns}"
+                for local_path, relative_path in upload_entries
+            ).encode("utf-8")).hexdigest()
+            state_path = self._state_path("upload", str(dataset["id"]), str(source_path))
+            state = self._load_state(state_path)
+            session = None
+            if state.get("uploadId"):
+                if state.get("sourceFingerprint") and state["sourceFingerprint"] != source_fingerprint:
+                    try:
+                        self._json_request("DELETE", f"/api/uploads/{urllib.parse.quote(state['uploadId'], safe='')}")
+                    except MedicalDatasetsError:
+                        pass
+                    state = {}
+                try:
+                    candidate = self._json(f"/api/uploads/{urllib.parse.quote(state.get('uploadId', ''), safe='')}") if state.get("uploadId") else None
+                    if candidate is None:
+                        raise MedicalDatasetsError("没有可续传会话")
+                    if candidate.get("status") == "completed":
+                        return {"id": candidate["id"], "status": "completed", "dataset": dataset, "revision": {"id": dataset.get("contentRevision")}, "resumed": True}
+                    if candidate.get("status") == "open" and int(candidate.get("datasetId", 0)) == int(dataset["id"]):
+                        session = candidate
+                except MedicalDatasetsError:
+                    pass
+            if session is None:
+                session = self._json_request(
+                    "POST", f"/api/datasets/{dataset['id']}/uploads", {"message": message}
+                )
+                state = {"uploadId": session["id"], "datasetId": dataset["id"], "source": str(source_path), "sourceFingerprint": source_fingerprint}
+                self._save_state(state_path, state)
             upload_id = session["id"]
             server_limit = int(session.get("limits", {}).get("maxChunkBytes") or chunk_size)
             actual_chunk_size = max(1024 * 1024, min(int(chunk_size), server_limit))
+            existing_files = {item["path"]: item for item in session.get("files", [])}
             for local_path, relative_path in upload_entries:
                 size_bytes = local_path.stat().st_size
-                remote = self._json_request(
-                    "POST",
-                    f"/api/uploads/{urllib.parse.quote(upload_id, safe='')}/files",
-                    {
-                        "path": relative_path,
-                        "sizeBytes": size_bytes,
-                        "direct": True,
-                        "contentType": "application/octet-stream",
-                    },
-                )
+                remote = existing_files.get(relative_path)
+                if remote and int(remote.get("sizeBytes", -1)) != size_bytes:
+                    raise MedicalDatasetsError(f"本地文件大小在续传期间发生变化: {relative_path}")
+                if remote is None:
+                    remote = self._json_request(
+                        "POST",
+                        f"/api/uploads/{urllib.parse.quote(upload_id, safe='')}/files",
+                        {
+                            "path": relative_path,
+                            "sizeBytes": size_bytes,
+                            "direct": True,
+                            "contentType": "application/octet-stream",
+                        },
+                    )
+                if remote.get("status") == "ready" and int(remote.get("uploadedBytes", 0)) == size_bytes:
+                    if progress:
+                        progress(relative_path, size_bytes, size_bytes)
+                    continue
+                if remote.get("multipart") or remote.get("multipartUploadId"):
+                    self._upload_multipart(upload_id, remote, local_path, relative_path, size_bytes, progress)
+                    continue
+                if remote.get("direct"):
+                    self._json_request(
+                        "POST",
+                        f"/api/uploads/{urllib.parse.quote(upload_id, safe='')}/files/{urllib.parse.quote(remote['id'], safe='')}/complete",
+                        {},
+                    )
+                    if progress:
+                        progress(relative_path, size_bytes, size_bytes)
+                    continue
                 if remote.get("uploadUrl"):
                     with local_path.open("rb") as handle:
                         upload_request = urllib.request.Request(
@@ -300,18 +387,46 @@ class MedicalDatasetsClient:
                 raise MedicalDatasetsError(job.get("error") or "平台未能生成整理方案")
             return job
         except Exception:
-            try:
-                if upload_id:
-                    self._json_request(
-                        "DELETE",
-                        f"/api/uploads/{urllib.parse.quote(upload_id, safe='')}"
-                        f"{'?removeDataset=1' if new_dataset else ''}",
-                    )
-                elif new_dataset:
-                    self._json_request("DELETE", f"/api/datasets/{dataset['id']}")
-            except MedicalDatasetsError:
-                pass
             raise
+
+    def _upload_multipart(self, upload_id: str, remote: dict, local_path: Path, relative_path: str, size_bytes: int, progress: ProgressCallback | None) -> None:
+        base = f"/api/uploads/{urllib.parse.quote(upload_id, safe='')}/files/{urllib.parse.quote(remote['id'], safe='')}/multipart"
+        status = self._json(base)
+        part_size = int(status["partSizeBytes"])
+        completed = {int(part["partNumber"]): int(part["sizeBytes"]) for part in status.get("parts", [])}
+        uploaded_bytes = sum(completed.values())
+        if progress:
+            progress(relative_path, uploaded_bytes, size_bytes)
+        part_count = (size_bytes + part_size - 1) // part_size
+        if part_count > int(status.get("maxParts", 10000)):
+            raise MedicalDatasetsError(f"文件需要 {part_count} 个分片，超过对象存储限制")
+        with local_path.open("rb") as handle:
+            for part_number in range(1, part_count + 1):
+                offset = (part_number - 1) * part_size
+                length = min(part_size, size_bytes - offset)
+                if completed.get(part_number) == length:
+                    continue
+                for attempt in range(1, 6):
+                    handle.seek(offset)
+                    signed = self._json_request("POST", f"{base}/parts/{part_number}", {})
+                    request = urllib.request.Request(
+                        signed["url"],
+                        data=_PartReader(handle, length, relative_path, offset, size_bytes, progress),
+                        method="PUT",
+                        headers={"Content-Length": str(length)},
+                    )
+                    try:
+                        with urllib.request.urlopen(request, timeout=max(self.timeout, 3600)) as response:
+                            response.read()
+                        uploaded_bytes += length
+                        if progress:
+                            progress(relative_path, uploaded_bytes, size_bytes)
+                        break
+                    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
+                        if attempt == 5:
+                            raise MedicalDatasetsError(f"Multipart 分片 {part_number} 上传失败，重新执行命令可续传: {error}") from error
+                        time.sleep(min(2 ** (attempt - 1), 8))
+        self._json_request("POST", f"/api/uploads/{urllib.parse.quote(upload_id, safe='')}/files/{urllib.parse.quote(remote['id'], safe='')}/complete", {})
 
     def get_import(self, upload_id: str) -> dict:
         """Return the current analysis or commit state for an upload."""
@@ -356,7 +471,16 @@ class MedicalDatasetsClient:
             poll_interval=poll_interval,
             exclude=exclude,
         )
-        return self.commit_import(job["id"]) if confirm else job
+        if job.get("status") == "completed":
+            self._remove_state(self._state_path("upload", str(job["dataset"]["id"]), str(Path(source).expanduser().resolve())))
+            return job
+        if not confirm:
+            return job
+        result = self.commit_import(job["id"])
+        source_path = Path(source).expanduser().resolve()
+        dataset = self.get_dataset(slug)
+        self._remove_state(self._state_path("upload", str(dataset["id"]), str(source_path)))
+        return result
 
     def iter_directory(self, slug: str, path: str = "") -> Iterator[dict]:
         """Yield every entry in a directory, transparently following API pages."""
@@ -428,49 +552,58 @@ class MedicalDatasetsClient:
             return target
 
         query = urllib.parse.urlencode({"path": path})
+        last_error: Exception | None = None
+        for attempt in range(1, 9):
+            downloaded = partial.stat().st_size if partial.is_file() else 0
+            if expected_size is not None and downloaded == expected_size:
+                break
+            try:
+                request = self._fresh_download_request(slug, query)
+                if downloaded:
+                    request.add_header("Range", f"bytes={downloaded}-")
+                response = urllib.request.urlopen(request, timeout=max(self.timeout, 3600))
+                with response:
+                    append = downloaded > 0 and response.status == 206
+                    if not append:
+                        downloaded = 0
+                    content_length = int(response.headers.get("Content-Length", "0"))
+                    total = expected_size or (downloaded + content_length)
+                    with partial.open("ab" if append else "wb") as output:
+                        while True:
+                            chunk = response.read(4 * 1024 * 1024)
+                            if not chunk:
+                                break
+                            output.write(chunk)
+                            downloaded += len(chunk)
+                            if progress:
+                                progress(path, downloaded, total)
+                if expected_size is None or partial.stat().st_size == expected_size:
+                    break
+                last_error = MedicalDatasetsError(f"下载连接提前结束，已保留 {partial.stat().st_size} 字节")
+            except (urllib.error.HTTPError, urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, MedicalDatasetsError) as error:
+                last_error = error
+            if attempt < 8:
+                time.sleep(min(2 ** (attempt - 1), 8))
+
+        if expected_size is not None and partial.stat().st_size != expected_size:
+            raise MedicalDatasetsError(
+                f"下载大小不一致: {path}（预期 {expected_size}，实际 {partial.stat().st_size}）；重新执行命令可继续下载"
+            ) from last_error
+        partial.replace(target)
+        return target
+
+    def _fresh_download_request(self, slug: str, query: str) -> urllib.request.Request:
         request = self._request(f"/api/datasets/{self._quote_slug(slug)}/object-download?{query}")
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 object_download = json.load(response)
-            request = urllib.request.Request(object_download["url"], method="GET")
+            return urllib.request.Request(object_download["url"], method="GET")
         except urllib.error.HTTPError as error:
             if error.code not in {404, 409}:
                 raise self._api_error(error) from error
-            request = self._request(f"/api/datasets/{self._quote_slug(slug)}/download?{query}")
+            return self._request(f"/api/datasets/{self._quote_slug(slug)}/download?{query}")
         except (KeyError, json.JSONDecodeError):
-            request = self._request(f"/api/datasets/{self._quote_slug(slug)}/download?{query}")
-        if downloaded:
-            request.add_header("Range", f"bytes={downloaded}-")
-
-        try:
-            response = urllib.request.urlopen(request, timeout=self.timeout)
-        except urllib.error.HTTPError as error:
-            raise self._api_error(error) from error
-        except urllib.error.URLError as error:
-            raise MedicalDatasetsError(f"无法连接数据集平台: {error.reason}") from error
-
-        with response:
-            append = downloaded > 0 and response.status == 206
-            if not append:
-                downloaded = 0
-            content_length = int(response.headers.get("Content-Length", "0"))
-            total = expected_size or (downloaded + content_length)
-            with partial.open("ab" if append else "wb") as output:
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    output.write(chunk)
-                    downloaded += len(chunk)
-                    if progress:
-                        progress(path, downloaded, total)
-
-        if expected_size is not None and partial.stat().st_size != expected_size:
-            raise MedicalDatasetsError(
-                f"下载大小不一致: {path}（预期 {expected_size}，实际 {partial.stat().st_size}）"
-            )
-        partial.replace(target)
-        return target
+            return self._request(f"/api/datasets/{self._quote_slug(slug)}/download?{query}")
 
     def _json(self, path: str) -> dict:
         return self._json_request("GET", path)
@@ -541,3 +674,33 @@ class MedicalDatasetsClient:
         if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
             raise MedicalDatasetsError(f"服务端返回了不安全的文件路径: {value}")
         return Path(*path.parts)
+
+    def _state_path(self, kind: str, *values: str) -> Path:
+        identity = hashlib.sha256("\0".join((self.base_url, kind, *values)).encode("utf-8")).hexdigest()
+        return Path(os.getenv("MEDICAL_DATASETS_STATE_DIR", Path.home() / ".medical-datasets" / "transfers")) / f"{kind}-{identity}.json"
+
+    @staticmethod
+    def _load_state(path: Path) -> dict:
+        try:
+            value = json.loads(path.read_text("utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    @staticmethod
+    def _save_state(path: Path, value: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value, ensure_ascii=False), "utf-8")
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        temporary.replace(path)
+
+    @staticmethod
+    def _remove_state(path: Path) -> None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass

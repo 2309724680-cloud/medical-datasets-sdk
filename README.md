@@ -60,6 +60,8 @@ medical-datasets upload ./dataset-folder \
 
 For a new dataset, provide the dataset name and data source. Other web metadata is not required for SDK uploads.
 
+Large files use S3 multipart upload automatically. Re-run the same command after a network interruption or terminal restart to continue completed parts instead of starting over. The platform supports individual objects up to 5 TiB; use the SDK for datasets larger than 10 GiB.
+
 Windows PowerShell example:
 
 ```powershell
@@ -79,6 +81,14 @@ medical-datasets download example-dataset --destination ./datasets
 ```
 
 Interrupted downloads use a `.part` file and resume automatically when the server supports HTTP ranges.
+Expired object-storage URLs are renewed automatically while the `.part` file is retained.
+
+### Very large dataset capacity planning
+
+- The per-object limit is 5 TiB. A 1 TiB object uses 8,192 parts of 128 MiB by default.
+- Upload sessions remain resumable for 30 days.
+- The current platform keeps a local browsable repository in addition to the MinIO primary object, so plan for at least twice the dataset's logical size plus extraction headroom.
+- Upload expanded directories instead of very large archives to avoid temporary extraction amplification.
 
 ## Key handling
 

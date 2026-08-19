@@ -1,6 +1,8 @@
 import os
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -81,6 +83,56 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(result["revision"]["id"], "revision-3")
         self.assertEqual(client.create_dataset.call_args.args[0], "scan-batch")
+
+    def test_multipart_upload_skips_completed_parts_and_completes(self):
+        client = MedicalDatasetsClient("http://platform.example", token="sdk-secret")
+        responses = [
+            {"partSizeBytes": 4, "maxParts": 10000, "parts": [{"partNumber": 1, "sizeBytes": 4}]},
+            {"url": "http://minio.example/part-2"},
+            {"url": "http://minio.example/part-3"},
+            {"status": "ready"},
+        ]
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        response.read.return_value = b""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory, "large.bin")
+            source.write_bytes(b"abcdefghijkl")
+            with patch.object(client, "_json_request", side_effect=responses) as api, patch("urllib.request.urlopen", return_value=response) as urlopen:
+                client._upload_multipart("upload-1", {"id": "file-1"}, source, "large.bin", 12, None)
+
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertEqual(urlopen.call_args_list[0].args[0].full_url, "http://minio.example/part-2")
+        self.assertIn("/complete", api.call_args_list[-1].args[1])
+
+    def test_download_reissues_url_and_resumes_after_interruption(self):
+        client = MedicalDatasetsClient("http://platform.example", token="sdk-secret")
+
+        class InterruptedResponse:
+            status = 200
+            headers = {"Content-Length": "10"}
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self, _size):
+                if hasattr(self, "sent"):
+                    raise urllib.error.URLError("connection reset")
+                self.sent = True
+                return b"hello"
+
+        class ResumedResponse:
+            status = 206
+            headers = {"Content-Length": "5"}
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self, _size):
+                if hasattr(self, "sent"): return b""
+                self.sent = True
+                return b"world"
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(client, "_fresh_download_request", side_effect=[urllib.request.Request("http://minio/first"), urllib.request.Request("http://minio/second")]), patch("urllib.request.urlopen", side_effect=[InterruptedResponse(), ResumedResponse()]):
+            target = client.download_file("dataset", "large.bin", Path(directory, "large.bin"), expected_size=10)
+            self.assertEqual(target.read_bytes(), b"helloworld")
 
 
 if __name__ == "__main__":
