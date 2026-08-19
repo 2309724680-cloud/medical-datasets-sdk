@@ -90,15 +90,16 @@ medical-datasets --base-url http://10.20.13.1:24174 auth-check
 创建新数据集：
 
 ```powershell
-medical-datasets upload "C:\Users\86131\Desktop\测试2"
+py -3 -m medical_datasets_sdk.cli upload "C:\Users\86131\Desktop\测试2" --name "测试2" --source-name "影像科项目"
 ```
 
-新建数据集时默认使用本机文件或目录名称，不需要提前填写网页元数据。需要覆盖默认值时，可选用 `--name`、`--source-name` 和 `--category` 参数。
+新建数据集时需要填写数据集名称和数据来源，其他网页元数据无需填写。
 
 Linux 或 macOS：
 
 ```bash
 medical-datasets upload ./dataset-folder \
+  --name "胸部 CT 训练集" \
   --source-name "项目组"
 ```
 
